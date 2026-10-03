@@ -14,3 +14,4 @@ artifacts/
 .codex/
 .env
 .env.*
+TestResults/

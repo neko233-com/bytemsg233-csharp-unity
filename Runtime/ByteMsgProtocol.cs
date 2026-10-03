@@ -6,6 +6,7 @@ namespace ByteMsg233
     {
         public ByteMsgProtocolHello(ulong version, ulong minCompatible)
         {
+            if (minCompatible > version) throw new ArgumentOutOfRangeException(nameof(minCompatible));
             Version = version;
             MinCompatible = minCompatible;
         }
@@ -27,6 +28,7 @@ namespace ByteMsg233
             var reader = new ByteMsgReader(data);
             ulong version = 0;
             ulong minCompatible = 0;
+            bool hasVersion = false, hasMinimum = false;
 
             while (!reader.IsEof)
             {
@@ -34,9 +36,13 @@ namespace ByteMsg233
                 switch (header.Tag)
                 {
                     case 1:
+                        if (hasVersion || header.WireType != ByteMsgWireType.Varint) throw new FormatException("Invalid protocol version field.");
+                        hasVersion = true;
                         version = reader.ReadVarint();
                         break;
                     case 2:
+                        if (hasMinimum || header.WireType != ByteMsgWireType.Varint) throw new FormatException("Invalid protocol minimum field.");
+                        hasMinimum = true;
                         minCompatible = reader.ReadVarint();
                         break;
                     default:
@@ -45,6 +51,7 @@ namespace ByteMsg233
                 }
             }
 
+            if (!hasVersion || !hasMinimum || minCompatible > version) throw new FormatException("Incomplete or invalid protocol hello.");
             return new ByteMsgProtocolHello(version, minCompatible);
         }
 

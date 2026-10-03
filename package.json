@@ -1,6 +1,6 @@
 {
   "name": "com.neko233.bytemsg233",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "displayName": "ByteMsg233 Runtime",
   "description": "Unity-friendly C# runtime for bytemsg233 binary schemas.",
   "unity": "2021.3",

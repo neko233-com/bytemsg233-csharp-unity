@@ -1,18 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
-    <LangVersion>latest</LangVersion>
-    <Nullable>enable</Nullable>
+    <TargetFrameworks>netstandard2.0;netstandard2.1;net462;net8.0;net9.0;net10.0</TargetFrameworks>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <AssemblyName>ByteMsg233</AssemblyName>
     <RootNamespace>ByteMsg233</RootNamespace>
-    <Version>1.0.1</Version>
+    <Authors>neko233-com</Authors>
+    <Version>1.1.0</Version>
+    <PackageId>ByteMsg233.Unity</PackageId>
     <RepositoryUrl>https://github.com/neko233-com/bytemsg233-csharp-unity</RepositoryUrl>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Description>ByteMsg233 binary serialization runtime for Unity and C#, with reusable buffers and bounded decoding.</Description>
+    <PackageProjectUrl>https://github.com/neko233-com/bytemsg233-csharp-unity</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <PackageTags>game;framework;csharp;bytemsg233</PackageTags>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Runtime/**/*.cs" />
     <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' Or '$(TargetFramework)' == 'net462'">
+    <PackageReference Include="System.Memory" Version="4.6.3" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net462'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net462" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
 </Project>

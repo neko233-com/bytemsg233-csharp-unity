@@ -1,18 +1,38 @@
 name: ci
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 jobs:
   verify:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
-      - run: dotnet build ByteMsg233.csproj -c Release
-      - run: dotnet run --project Tests/ByteMsg233.Tests.csproj -c Release
-      - run: dotnet pack ByteMsg233.csproj -c Release --no-build -o artifacts
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: 'Interop~/Go/go.sum'
+      - name: Test runtimes and installed NuGet package
+        shell: pwsh
+        run: |
+          if ($IsWindows) {
+            ./eng/verify.ps1 -Frameworks net8.0,net9.0,net10.0,net462 -Legacy -Interop
+          } else {
+            ./eng/verify.ps1 -Frameworks net8.0,net9.0,net10.0 -Interop
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-${{ matrix.os }}
+          path: |
+            TestResults/*.trx
+            artifacts/*.nupkg

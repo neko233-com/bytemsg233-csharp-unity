@@ -1,334 +1,200 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Text;
 
 namespace ByteMsg233
 {
+    /// <summary>Reusable single-threaded writer. Views remain valid only until the next mutation.</summary>
     public sealed class ByteMsgWriter
     {
-        private readonly MemoryStream _stream;
-        private readonly byte[] _scratch = new byte[10];
-
-        public ByteMsgWriter(int capacity = 128)
+        private static readonly Encoding Utf8 = new UTF8Encoding(false, true);
+        private byte[] _buffer;
+        private int _length;
+        private readonly int _maxCapacity;
+        private readonly bool _allowGrowth;
+        public ByteMsgWriter(int capacity = 128) : this(capacity, 16 * 1024 * 1024) { }
+        public ByteMsgWriter(int capacity, int maxCapacity)
         {
-            _stream = new MemoryStream(capacity);
+            if (capacity < 0 || maxCapacity < capacity) throw new ArgumentOutOfRangeException(nameof(capacity));
+            _buffer = new byte[capacity]; _maxCapacity = maxCapacity; _allowGrowth = true;
         }
-
-        public int Length => (int)_stream.Length;
-
-        public void Reset()
+        public ByteMsgWriter(byte[] buffer)
         {
-            _stream.SetLength(0);
+            _buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
+            _maxCapacity = buffer.Length; _allowGrowth = false;
         }
-
+        public int Length => _length;
+        public int Capacity => _buffer.Length;
+        public void Reset() { _length = 0; }
         public byte[] ToArray()
         {
-            return _stream.ToArray();
+            if (_length == 0) return Array.Empty<byte>();
+            var result = new byte[_length]; Buffer.BlockCopy(_buffer, 0, result, 0, _length); return result;
         }
-
-        public ArraySegment<byte> ToArraySegment()
+        public ArraySegment<byte> ToArraySegment() => new ArraySegment<byte>(_buffer, 0, _length);
+        public ReadOnlySpan<byte> WrittenSpan => new ReadOnlySpan<byte>(_buffer, 0, _length);
+        private void Ensure(int additional)
         {
-            return _stream.TryGetBuffer(out var segment) ? segment : new ArraySegment<byte>(ToArray());
+            if (additional < 0 || additional > _maxCapacity - _length) throw new InvalidOperationException("ByteMsg233 writer capacity limit exceeded.");
+            var required = _length + additional;
+            if (required <= _buffer.Length) return;
+            if (!_allowGrowth) throw new InvalidOperationException("ByteMsg233 caller buffer is full.");
+            var grown = (int)Math.Min(_maxCapacity, Math.Max((long)required, Math.Max(16L, _buffer.Length * 2L)));
+            Array.Resize(ref _buffer, grown);
         }
-
         public void WriteRaw(ReadOnlySpan<byte> bytes)
         {
-            if (bytes.Length == 0)
-            {
-                return;
-            }
-
-            _stream.Write(bytes);
+            Ensure(bytes.Length); bytes.CopyTo(new Span<byte>(_buffer, _length, bytes.Length)); _length += bytes.Length;
         }
-
+        public void WriteRaw(byte[] bytes, int offset, int count)
+        {
+            if (bytes == null) throw new ArgumentNullException(nameof(bytes));
+            if (offset < 0 || count < 0 || offset > bytes.Length - count) throw new ArgumentOutOfRangeException(nameof(offset));
+            Ensure(count); Buffer.BlockCopy(bytes, offset, _buffer, _length, count); _length += count;
+        }
+        private static int VarintSize(ulong value)
+        {
+            var size = 1; while (value >= 128) { value >>= 7; size++; } return size;
+        }
         public void WriteVarint(ulong value)
         {
-            var index = 0;
-            while (value >= 0x80)
-            {
-                _scratch[index++] = (byte)(value | 0x80);
-                value >>= 7;
-            }
-
-            _scratch[index++] = (byte)value;
-            _stream.Write(_scratch, 0, index);
+            Ensure(VarintSize(value));
+            while (value >= 128) { _buffer[_length++] = (byte)(value | 128); value >>= 7; }
+            _buffer[_length++] = (byte)value;
         }
-
-        public void WriteUInt(uint value)
-        {
-            WriteVarint(value);
-        }
-
-        public void WriteULong(ulong value)
-        {
-            WriteVarint(value);
-        }
-
-        public void WriteZigZag(long value)
-        {
-            WriteVarint(ZigZagEncode(value));
-        }
-
-        public void WriteBool(bool value)
-        {
-            WriteVarint(value ? 1UL : 0UL);
-        }
-
-        public void WriteEnum(int value)
-        {
-            WriteVarint((ulong)value);
-        }
-
+        public void WriteUInt(uint value) => WriteVarint(value);
+        public void WriteULong(ulong value) => WriteVarint(value);
+        public void WriteZigZag(long value) => WriteVarint(ZigZagEncode(value));
+        public void WriteBool(bool value) => WriteVarint(value ? 1UL : 0UL);
+        public void WriteEnum(int value) => WriteVarint(unchecked((ulong)value));
         public void WriteString(string value)
         {
-            value ??= string.Empty;
-            var bytes = Encoding.UTF8.GetBytes(value);
-            WriteBytes(bytes);
+            value = value ?? string.Empty;
+            var count = Utf8.GetByteCount(value);
+            Ensure(checked(VarintSize((ulong)count) + count));
+            WriteVarint((ulong)count);
+            _length += Utf8.GetBytes(value, 0, value.Length, _buffer, _length);
         }
-
-        public void WritePackedVarints(IReadOnlyList<ulong>? values)
-        {
-            if (values == null)
-            {
-                WriteVarint(0);
-                return;
-            }
-
-            WriteVarint((ulong)values.Count);
-            for (var i = 0; i < values.Count; i++)
-            {
-                WriteVarint(values[i]);
-            }
-        }
-
-        public void WriteDeltaVarints(IReadOnlyList<ulong>? values)
-        {
-            if (values == null || values.Count == 0)
-            {
-                WriteVarint(0);
-                return;
-            }
-
-            WriteVarint((ulong)values.Count);
-            var previous = values[0];
-            WriteVarint(previous);
-            for (var i = 1; i < values.Count; i++)
-            {
-                var current = values[i];
-                WriteVarint(ZigZagEncode(unchecked((long)current - (long)previous)));
-                previous = current;
-            }
-        }
-
-        public void WriteBoolBitset(IReadOnlyList<bool>? values)
-        {
-            if (values == null)
-            {
-                WriteVarint(0);
-                return;
-            }
-
-            WriteVarint((ulong)values.Count);
-            byte current = 0;
-            for (var i = 0; i < values.Count; i++)
-            {
-                if (values[i])
-                {
-                    current |= (byte)(1 << (i & 7));
-                }
-
-                if ((i & 7) == 7)
-                {
-                    _stream.WriteByte(current);
-                    current = 0;
-                }
-            }
-
-            if ((values.Count & 7) != 0)
-            {
-                _stream.WriteByte(current);
-            }
-        }
-
-        public void WriteStringList(IReadOnlyList<string>? values)
-        {
-            if (values == null)
-            {
-                WriteVarint(0);
-                return;
-            }
-
-            WriteVarint((ulong)values.Count);
-            for (var i = 0; i < values.Count; i++)
-            {
-                WriteString(values[i]);
-            }
-        }
-
-        public void WriteBytes(byte[]? value)
-        {
-            value ??= Array.Empty<byte>();
-            WriteBytes(value.AsSpan());
-        }
-
+        public void WriteBytes(byte[] value) => WriteBytes(value == null ? ReadOnlySpan<byte>.Empty : new ReadOnlySpan<byte>(value));
         public void WriteBytes(ReadOnlySpan<byte> value)
         {
-            WriteVarint((ulong)value.Length);
-            _stream.Write(value);
+            Ensure(checked(VarintSize((ulong)value.Length) + value.Length));
+            WriteVarint((ulong)value.Length); WriteRaw(value);
         }
-
-        public void WriteBytes(ByteMsgByteBuffer? value)
-        {
-            WriteBytes(value == null ? ReadOnlySpan<byte>.Empty : value.Span);
-        }
-
+        public void WriteBytes(ByteMsgByteBuffer value) => WriteBytes(value == null ? ReadOnlySpan<byte>.Empty : value.Span);
         public void WriteFixed32(uint value)
         {
-            _scratch[0] = (byte)value;
-            _scratch[1] = (byte)(value >> 8);
-            _scratch[2] = (byte)(value >> 16);
-            _scratch[3] = (byte)(value >> 24);
-            _stream.Write(_scratch, 0, 4);
+            Ensure(4);
+            for (var i = 0; i < 4; i++) _buffer[_length++] = (byte)(value >> (8 * i));
         }
-
         public void WriteFixed64(ulong value)
         {
-            _scratch[0] = (byte)value;
-            _scratch[1] = (byte)(value >> 8);
-            _scratch[2] = (byte)(value >> 16);
-            _scratch[3] = (byte)(value >> 24);
-            _scratch[4] = (byte)(value >> 32);
-            _scratch[5] = (byte)(value >> 40);
-            _scratch[6] = (byte)(value >> 48);
-            _scratch[7] = (byte)(value >> 56);
-            _stream.Write(_scratch, 0, 8);
+            Ensure(8);
+            for (var i = 0; i < 8; i++) _buffer[_length++] = (byte)(value >> (8 * i));
         }
-
+        public void WritePackedVarints(IReadOnlyList<ulong> values)
+        {
+            WriteVarint((ulong)(values == null ? 0 : values.Count));
+            if (values != null) for (var i = 0; i < values.Count; i++) WriteVarint(values[i]);
+        }
+        public void WritePackedZigZags(IReadOnlyList<long> values)
+        {
+            WriteVarint((ulong)(values == null ? 0 : values.Count));
+            if (values != null) for (var i = 0; i < values.Count; i++) WriteZigZag(values[i]);
+        }
+        public void WriteDeltaVarints(IReadOnlyList<ulong> values)
+        {
+            WriteVarint((ulong)(values == null ? 0 : values.Count));
+            if (values == null || values.Count == 0) return;
+            var previous = values[0]; WriteVarint(previous);
+            for (var i = 1; i < values.Count; i++)
+            {
+                var current = values[i]; WriteZigZag(unchecked((long)current - (long)previous)); previous = current;
+            }
+        }
+        public void WriteBoolBitset(IReadOnlyList<bool> values)
+        {
+            WriteVarint((ulong)(values == null ? 0 : values.Count));
+            if (values == null) return;
+            for (var index = 0; index < values.Count; index += 8)
+            {
+                byte bits = 0;
+                for (var bit = 0; bit < Math.Min(8, values.Count - index); bit++)
+                    if (values[index + bit]) bits |= (byte)(1 << bit);
+                Ensure(1); _buffer[_length++] = bits;
+            }
+        }
+        public void WriteStringList(IReadOnlyList<string> values)
+        {
+            WriteVarint((ulong)(values == null ? 0 : values.Count));
+            if (values != null) for (var i = 0; i < values.Count; i++) WriteString(values[i]);
+        }
+        internal static bool IsValidWireType(ByteMsgWireType value)
+            => value == ByteMsgWireType.Varint || value == ByteMsgWireType.Fixed32 || value == ByteMsgWireType.Fixed64 || value == ByteMsgWireType.LengthDelimited;
         public void WriteFieldHeader(int tag, ByteMsgWireType wireType)
         {
-            if (tag <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(tag), tag, "Field tag must be positive.");
-            }
-
-            WriteVarint((ulong)((tag << 3) | (int)wireType));
+            if (tag <= 0 || tag > 0x1fffffff) throw new ArgumentOutOfRangeException(nameof(tag));
+            if (!IsValidWireType(wireType)) throw new ArgumentOutOfRangeException(nameof(wireType));
+            WriteVarint(((ulong)tag << 3) | (uint)wireType);
         }
+        public void WriteUIntField(int tag, uint value) { WriteFieldHeader(tag, ByteMsgWireType.Varint); WriteUInt(value); }
+        public void WriteULongField(int tag, ulong value) { WriteFieldHeader(tag, ByteMsgWireType.Varint); WriteULong(value); }
+        public void WriteZigZagField(int tag, long value) { WriteFieldHeader(tag, ByteMsgWireType.Varint); WriteZigZag(value); }
+        public void WriteBoolField(int tag, bool value) { WriteFieldHeader(tag, ByteMsgWireType.Varint); WriteBool(value); }
+        public void WriteEnumField(int tag, int value) { WriteFieldHeader(tag, ByteMsgWireType.Varint); WriteEnum(value); }
+        public void WriteStringField(int tag, string value) { WriteFieldHeader(tag, ByteMsgWireType.LengthDelimited); WriteString(value); }
+        public void WriteBytesField(int tag, byte[] value) { WriteFieldHeader(tag, ByteMsgWireType.LengthDelimited); WriteBytes(value); }
 
-        public void WriteUIntField(int tag, uint value)
-        {
-            WriteFieldHeader(tag, ByteMsgWireType.Varint);
-            WriteUInt(value);
-        }
-
-        public void WriteULongField(int tag, ulong value)
-        {
-            WriteFieldHeader(tag, ByteMsgWireType.Varint);
-            WriteULong(value);
-        }
-
-        public void WriteZigZagField(int tag, long value)
-        {
-            WriteFieldHeader(tag, ByteMsgWireType.Varint);
-            WriteZigZag(value);
-        }
-
-        public void WriteBoolField(int tag, bool value)
-        {
-            WriteFieldHeader(tag, ByteMsgWireType.Varint);
-            WriteBool(value);
-        }
-
-        public void WriteEnumField(int tag, int value)
-        {
-            WriteFieldHeader(tag, ByteMsgWireType.Varint);
-            WriteEnum(value);
-        }
-
-        public void WriteStringField(int tag, string value)
-        {
-            WriteFieldHeader(tag, ByteMsgWireType.LengthDelimited);
-            WriteString(value);
-        }
-
-        public void WriteBytesField(int tag, byte[] value)
-        {
-            WriteFieldHeader(tag, ByteMsgWireType.LengthDelimited);
-            WriteBytes(value);
-        }
-
+        /// <summary>The callback appends to this writer. It must not Reset the writer or alter earlier output.</summary>
         public void WriteMessage(Action<ByteMsgWriter> encode)
         {
-            if (encode == null)
+            if (encode == null) throw new ArgumentNullException(nameof(encode));
+            var start = _length;
+            try
             {
-                throw new ArgumentNullException(nameof(encode));
+                WriteVarint(0); encode(this);
+                if (_length <= start) throw new InvalidOperationException("A nested encoder reset its writer.");
+                var count = _length - start - 1;
+                var extra = VarintSize((ulong)count) - 1;
+                Ensure(extra);
+                if (extra > 0) Buffer.BlockCopy(_buffer, start + 1, _buffer, start + 1 + extra, count);
+                var end = _length + extra; _length = start;
+                WriteVarint((ulong)count); _length = end;
             }
-
-            var nested = new ByteMsgWriter();
-            encode(nested);
-            var bytes = nested.ToArray();
-            WriteBytes(bytes);
+            catch { _length = start; throw; }
         }
-
         public void WriteMessageField(int tag, Action<ByteMsgWriter> encode)
         {
-            WriteFieldHeader(tag, ByteMsgWireType.LengthDelimited);
-            WriteMessage(encode);
+            if (encode == null) throw new ArgumentNullException(nameof(encode));
+            var start = _length;
+            try { WriteFieldHeader(tag, ByteMsgWireType.LengthDelimited); WriteMessage(encode); }
+            catch { _length = start; throw; }
         }
-
-        public void WriteListField<T>(int tag, IReadOnlyList<T>? values, Action<ByteMsgWriter, T> writeItem)
+        public void WriteListField<T>(int tag, IReadOnlyList<T> values, Action<ByteMsgWriter, T> writeItem)
         {
-            if (values == null || values.Count == 0)
-            {
-                return;
-            }
-
+            if (writeItem == null) throw new ArgumentNullException(nameof(writeItem));
+            if (values == null || values.Count == 0) return;
             WriteMessageField(tag, writer =>
             {
                 writer.WriteVarint((ulong)values.Count);
-                for (var i = 0; i < values.Count; i++)
-                {
-                    writeItem(writer, values[i]);
-                }
+                for (var i = 0; i < values.Count; i++) writeItem(writer, values[i]);
             });
         }
-
-        public void WriteMapField<TKey, TValue>(
-            int tag,
-            IEnumerable<KeyValuePair<TKey, TValue>>? values,
-            Action<ByteMsgWriter, TKey> writeKey,
-            Action<ByteMsgWriter, TValue> writeValue)
+        public void WriteMapField<TKey, TValue>(int tag, IEnumerable<KeyValuePair<TKey, TValue>> values,
+            Action<ByteMsgWriter, TKey> writeKey, Action<ByteMsgWriter, TValue> writeValue)
         {
-            if (values == null)
-            {
-                return;
-            }
-
+            if (writeKey == null) throw new ArgumentNullException(nameof(writeKey));
+            if (writeValue == null) throw new ArgumentNullException(nameof(writeValue));
+            if (values == null) return;
             var entries = values as ICollection<KeyValuePair<TKey, TValue>> ?? new List<KeyValuePair<TKey, TValue>>(values);
-            if (entries.Count == 0)
-            {
-                return;
-            }
-
+            if (entries.Count == 0) return;
             WriteMessageField(tag, writer =>
             {
                 writer.WriteVarint((ulong)entries.Count);
-                foreach (var entry in entries)
-                {
-                    writeKey(writer, entry.Key);
-                    writeValue(writer, entry.Value);
-                }
+                foreach (var entry in entries) { writeKey(writer, entry.Key); writeValue(writer, entry.Value); }
             });
         }
-
-        public static ulong ZigZagEncode(long value)
-        {
-            return (ulong)((value << 1) ^ (value >> 63));
-        }
-
-        public static long ZigZagDecode(ulong value)
-        {
-            return (long)((value >> 1) ^ (ulong)-(long)(value & 1));
-        }
+        public static ulong ZigZagEncode(long value) => unchecked((ulong)((value << 1) ^ (value >> 63)));
+        public static long ZigZagDecode(ulong value) => unchecked((long)((value >> 1) ^ (ulong)-(long)(value & 1)));
     }
 }

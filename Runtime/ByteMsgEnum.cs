@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 
 namespace ByteMsg233
 {
@@ -6,7 +7,7 @@ namespace ByteMsg233
     {
         public static TEnum FromValue<TEnum>(int value) where TEnum : struct, Enum
         {
-            if (!Enum.IsDefined(typeof(TEnum), value))
+            if (!IsDefinedValue<TEnum>(value))
             {
                 throw new ArgumentOutOfRangeException(nameof(value), value, $"Unknown {typeof(TEnum).Name} value.");
             }
@@ -16,7 +17,12 @@ namespace ByteMsg233
 
         public static bool IsDefinedValue<TEnum>(int value) where TEnum : struct, Enum
         {
-            return Enum.IsDefined(typeof(TEnum), value);
+            try
+            {
+                var underlying = Convert.ChangeType(value, Enum.GetUnderlyingType(typeof(TEnum)), CultureInfo.InvariantCulture);
+                return Enum.IsDefined(typeof(TEnum), underlying);
+            }
+            catch (OverflowException) { return false; }
         }
 
         public static int ToValue<TEnum>(TEnum value) where TEnum : struct, Enum

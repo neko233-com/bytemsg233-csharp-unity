@@ -10,3 +10,7 @@ UserSettings/
 *.sln.DotSettings.user
 *.unitypackage
 *.nupkg
+artifacts/
+.codex/
+.env
+.env.*

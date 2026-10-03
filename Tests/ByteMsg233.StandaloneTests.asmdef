@@ -1,0 +1,8 @@
+{
+  "name": "ByteMsg233.StandaloneTests",
+  "references": ["ByteMsg233.Runtime"],
+  "includePlatforms": ["Editor"],
+  "autoReferenced": false,
+  "defineConstraints": ["BYTEMSG233_STANDALONE_DOTNET_TESTS_ONLY"],
+  "noEngineReferences": true
+}

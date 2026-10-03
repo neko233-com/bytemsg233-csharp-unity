@@ -7,8 +7,12 @@
     <AssemblyName>ByteMsg233</AssemblyName>
     <RootNamespace>ByteMsg233</RootNamespace>
     <Version>1.0.1</Version>
+    <RepositoryUrl>https://github.com/neko233-com/bytemsg233-csharp-unity</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Runtime/**/*.cs" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

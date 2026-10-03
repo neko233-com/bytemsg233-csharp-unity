@@ -1,6 +1,8 @@
-# bytemsg233-lib-csharp
+# bytemsg233-csharp-unity
 
 Unity-friendly C# runtime for `bytemsg233`.
+
+本仓库复用现有 C# 运行库，保留 `ByteMsg233` API 和 `com.neko233.bytemsg233` 包名。来源和同步约定见 [UPSTREAM.md](UPSTREAM.md)。不要在同一项目中同时安装本仓库和 `bytemsg233-lib-csharp`。
 
 This repository is designed for two use cases:
 
@@ -14,7 +16,7 @@ The runtime stays small and native-feeling: writer, reader, single-threaded obje
 Add this Git URL in Unity Package Manager:
 
 ```text
-https://github.com/neko233-com/bytemsg233-lib-csharp.git
+https://github.com/neko233-com/bytemsg233-csharp-unity.git
 ```
 
 Or add it to `Packages/manifest.json`:
@@ -22,12 +24,12 @@ Or add it to `Packages/manifest.json`:
 ```json
 {
   "dependencies": {
-    "com.neko233.bytemsg233": "https://github.com/neko233-com/bytemsg233-lib-csharp.git"
+    "com.neko233.bytemsg233": "https://github.com/neko233-com/bytemsg233-csharp-unity.git"
   }
 }
 ```
 
-Copy-based install from the main repository:
+Copy-based install from the original generator repository (uses its upstream runtime):
 
 ```bash
 bytemsg233 install-lib csharp --to ./Assets/Plugins/ByteMsg233
@@ -118,5 +120,12 @@ public sealed class Hero : IByteMsgResettable
 ## Development
 
 ```bash
-dotnet test
+dotnet build ByteMsg233.csproj -c Release
+dotnet run --project Tests/ByteMsg233.Tests.csproj -c Release
+dotnet pack ByteMsg233.csproj -c Release --no-build -o artifacts
 ```
+
+Tests 是 .NET 10 可执行断言测试，不能用一次无测试输出的 `dotnet test` 代替。
+Runtime 目标为 .NET Standard 2.1。独立测试程序集在 Unity 中默认排除，请勿定义 `BYTEMSG233_STANDALONE_DOTNET_TESTS_ONLY`。
+
+本次验证覆盖 .NET 构建、编码 / 解码、未知字段跳过、紧凑列表、缓冲区复用和对象池。Unity Editor 导入、IL2CPP / WebGL 与真机仍待集成验证。
